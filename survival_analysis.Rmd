@@ -1,0 +1,225 @@
+---
+title: 'Survival Analysis'
+author: 'P. Schwarz'
+date: "21/09/2021"
+output:
+  pdf_document: 
+    extra_dependencies: ["xcolor"]
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Data
+The surgery data was split between two files and contains the following columns
+
+Variable name  | Description
+------------- | --------------------------------------------------------------------
+id  | Patient ID
+surgery_date  | Date of surgery
+event_date | Date of event
+event | Yes=Death, No=Censored due to end of study
+T|1=Surgery procedure A, 0= other surgery procedure
+inflammation | Inflammation score; higher score is more inflammation
+bmi| Body Mass Index (BMI)
+age| Age, in years, at date of surgery
+hospital | Hospital ID
+volume| Hospital volume; mean number of patients undergoing surgery at the hospital annually
+surgery_year| Year of surgery
+prior_treatment| 1=No prior treatment for the disease, 2=Prior treatment A, 3=Prior treatment A+B
+srh|Self reported health status; higher score is better health
+surgery_type|1= Surgery type A, 2=Surgery type B, 3=Surgery type C
+severity|Severity of disease as classified by a physician; higher score is more severe
+sex|Sex
+technique|Surgery technique; Open or Keyhole
+dead90|Yes=Dead within 90 days from date of surgery, No=Not dead within 90 days from date of surgery
+
+The goal is to conduct a survival analysis and a Cox proportional hazards regression based on the data sets.
+
+\newpage
+
+## Data Cleaning
+
+Initially, the data had to be merged and cleaned. The two files provided were merged by their `id` column. The files both came with headers, but different character delimiters.
+
+```{r, echo=FALSE}
+s1 <- read.table("surgery1.txt", header = T, sep = ";")
+s2 <- read.table("surgery2.txt", header = T, sep = ",")
+surgery <- merge(s1, s2, by='id' )
+```
+
+
+```{r, include=FALSE}
+#load all packages required
+#install.packages("VIM")
+library(VIM)
+library(mice)
+library(tidyverse)
+library(survival)
+library(survminer)
+library(lubridate)
+VIM::aggr(surgery)
+```
+
+An analysis of missing data was conducted, as is shown in the plot above, in which `severity` is shown as the column with more than 15% missing data points. After investigating the variable `technique` the missing values were re-coded to show as `NA` and therefore missing as well.
+
+
+```{r, echo=FALSE, include=FALSE}
+surgery <- surgery %>%mutate_if(is.character, as.factor)
+levels(surgery$technique)
+surgery$technique[surgery$technique ==""] <- "NA"
+
+surgery$technique <- droplevels(surgery$technique)
+levels(surgery$technique)
+```
+
+
+After this procedure the missingness within the data set was assessed again.
+
+```{r, echo=FALSE}
+VIM::aggr(surgery)
+```
+
+The plot above shows now also the missing values in the `technique` column.
+
+Further data cleaning was conducted by transforming `inflammation`, `prior_treatment`, `srh` and `severity` into ordered factors. `T`, `hospital` and `surgery_type` were transformed into regular factors. All of these were initially classified as a different type, which could cause problems in the analysis of categorical variables. 
+
+Additionally, the variables `surgery_date` and `event_date` were transformed to dates.
+
+
+```{r,echo=FALSE, include=FALSE}
+surgery <- surgery %>%
+    mutate_at(c("inflammation", "prior_treatment", "srh", "severity"), as.ordered) %>%
+    mutate_at(c("T", "hospital", "surgery_type"), as.factor) %>%
+    mutate( surgery_date = ymd(surgery_date)) %>%
+    mutate( event_date = mdy(event_date))
+```
+
+A new variable called `severity_ind` was created based on the value in the column `severity`.
+When `severity` is larger than `2` `severity_ind` takes value `1` and `0` if `severity` is lower.
+
+```{r, include=FALSE}
+surgery <- surgery %>%
+  mutate(severity_ind = factor(case_when(severity > 2 ~ "1", severity <= 2 ~ "0")))
+```
+
+Another new variable `Y` was added that contains the difference between `event_date` and `surgery_date` and will be used as the basis for the survival analysis later.
+
+
+```{r, include=FALSE}
+surgery <- surgery %>%
+  mutate(Y = difftime(event_date , surgery_date))
+```
+
+
+Lastly `surgery_date` and `event_date` were removed from the data set because the new variable made them obsolete.
+
+```{r, include=FALSE}
+new_data <- surgery%>%
+  select(-surgery_date, -event_date)
+```
+\newpage
+
+## Dealing With Missing Data
+
+To deal with the missing data a function was created that allows the deal with the missing data in 3 ways. The standard setting is to simply drop empty rows from the data set. Alternatively, hotdeck imputation or imputation based on the `mice` package can be conducted.
+
+```{r, echo=FALSE}
+
+handle_missing <- function(data, type = 'dropna', ...) {
+  if (type == 'dropna') {
+    imp <- data %>% drop_na()
+  }
+  else if (type =='hotdeck'){
+    imp <- VIM::hotdeck(data)
+  }
+  else if (type =='mice'){
+    imp <-  complete(mice(data, method = c("norm", ...)), "broad")
+  } 
+  return(imp)
+}
+
+```
+
+
+
+
+```{r, echo=FALSE}
+survival_data <- handle_missing(new_data, type = "hotdeck")
+aggr(survival_data)
+```
+
+The missing data was imputed using hotdeck imputation. The graph above shows how the missing values in the data set are gone. The resulting data was used for a survival analysis based on the time between the surgery and the end of the observed time frame or the death of the patient. The strata are based on the two different treatments surgery A and another type of surgery. To conduct this procedure the time and the event variable were re-coded to be numeric values.
+\newpage
+
+## Survival Analysis
+
+```{r, include=FALSE}
+
+fit <- survfit(Surv(as.numeric(survival_data$Y) , as.numeric(survival_data$event)) ~ survival_data$`T`)
+```
+
+
+
+```{r, echo=FALSE}
+p <- ggsurvplot(
+  fit, 
+  data = survival_data, 
+  size = 1,                 # change line size
+  palette = 
+    c("#E7B800", "#2E9FDF"),# custom color palettes
+  conf.int = TRUE,          # Add confidence interval
+  pval = TRUE,              # Add p-value
+  risk.table = TRUE,        # Add risk table
+  risk.table.col = "strata",# Risk table color by groups
+  legend.labs = 
+    c("Another surgery", "Surgery A"),    # Change legend labels
+  risk.table.height = 0.25, # Useful to change when you have multiple groups
+  ggtheme = theme_bw()      # Change ggplot2 theme
+)
+p
+```
+
+The result of the analysis is represented on the plot above.It can be seen that the comparison between the two surgery methods shows that surgery A results in a higher probability of patient survival in the time frame of the study. The difference between the two methods is statistically significant with a p value of 0.0013.
+\newpage
+
+## Cox proportional hazards regression
+
+Based on the the survival model a Cox proportional hazards regression was performed using the following model specification:
+ 
+$$
+h_i(t)=exp(\beta_1T+\beta_2inflammation+\beta_3srh+\beta_4 surgery\_type+\beta_5 sex+\beta_6bmi+\beta_7age)h_0(t)
+$$
+
+```{r, echo=FALSE}
+cox <- coxph(Surv(as.numeric(survival_data$Y) , as.numeric(survival_data$event)) ~ (survival_data$`T` + inflammation + `srh` + `surgery_type` + `sex` + `bmi` + `age`), data = survival_data)
+summary(cox )
+```
+
+The summary of the survival model above provides an exponentiated coefficient for the treatment variable of 0.9471.
+
+The 95% confidence interval for the treatment variable is [0.8379, 1.0705].
+
+All of the covariates except the inflammation and the treatment are statistically significant with a p-value lower than 0.05.
+\newpage
+```{r, echo=FALSE}
+cox.zph(cox)  
+```
+
+As the table above shows, the test for proportional hazards is not statistically significant for any of the covariates, nor the global test. Proportional hazards can be assumed.
+
+
+
+
+
+
+
+
+
+
+
