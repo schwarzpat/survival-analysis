@@ -166,7 +166,7 @@ fit <- survfit(Surv(as.numeric(survival_data$Y) , as.numeric(survival_data$event
 
 
 
-```{r, echo=FALSE}
+```{r, echo=FALSE , fig.width =6 ,fig.height = 6}
 p <- ggsurvplot(
   fit, 
   data = survival_data, 
@@ -214,6 +214,15 @@ cox.zph(cox)
 As the table above shows, the test for proportional hazards is not statistically significant for any of the covariates, nor the global test. Proportional hazards can be assumed.
 
 
+```{r, fig.width =8 ,fig.height = 8, echo=FALSE}
+ggcoxzph(cox.zph(cox))
+```
+
+```{r, fig.width =6 ,fig.height = 6}
+ggcoxdiagnostics(cox,
+ type = "schoenfeld"
+ )
+```
 
 
 
